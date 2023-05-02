@@ -3,7 +3,7 @@ use std::sync::{Mutex, Arc};
 use std::pin::Pin;
 use std::task::{Poll, Context, Waker};
 
-pub struct NotifyFutureState<RESULT> {
+struct NotifyFutureState<RESULT> {
     waker: Option<Waker>,
     result: Option<RESULT>,
 }
