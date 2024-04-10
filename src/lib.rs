@@ -25,16 +25,27 @@ impl <RESULT> NotifyFutureState<RESULT> {
     }
 }
 
-#[derive(Clone)]
-pub struct NotifyFuture<RESULT>(Arc<Mutex<NotifyFutureState<RESULT>>>);
+pub struct NotifyFuture<RESULT> {
+    state:Arc<Mutex<NotifyFutureState<RESULT>>>
+}
+
+impl<RESULT> Clone for NotifyFuture<RESULT> {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone()
+        }
+    }
+}
 
 impl <RESULT> NotifyFuture<RESULT> {
     pub fn new() -> Self {
-        Self(NotifyFutureState::new())
+        Self{
+            state: NotifyFutureState::new()
+        }
     }
 
     pub fn set_complete(&self, result: RESULT) {
-        NotifyFutureState::set_complete(&self.0, result);
+        NotifyFutureState::set_complete(&self.state, result);
     }
 }
 
@@ -42,7 +53,7 @@ impl <RESULT> Future for NotifyFuture<RESULT> {
     type Output = RESULT;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
         if state.result.is_some() {
             return Poll::Ready(state.result.take().unwrap());
         }
