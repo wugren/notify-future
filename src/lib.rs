@@ -74,7 +74,7 @@ pub struct Notify<RESULT> {
 }
 
 impl<RESULT> Notify<RESULT> {
-    fn new() -> (Self, NotifyWaiter<RESULT>) {
+    pub fn new() -> (Self, NotifyWaiter<RESULT>) {
         let state = NotifyFutureState::new();
         (Self {
             state: state.clone()
