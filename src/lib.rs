@@ -25,6 +25,10 @@ impl <RESULT> NotifyFutureState<RESULT> {
     }
 }
 
+#[deprecated(
+    since = "0.2.1",
+    note = "Please use Notify instead"
+)]
 pub struct NotifyFuture<RESULT> {
     state:Arc<Mutex<NotifyFutureState<RESULT>>>
 }
