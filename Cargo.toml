@@ -1,6 +1,6 @@
 [package]
 name = "notify-future"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 license = "MIT"
 license-file = "LICENSE"

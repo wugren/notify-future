@@ -6,13 +6,15 @@ use std::task::{Poll, Context, Waker};
 struct NotifyFutureState<RESULT> {
     waker: Option<Waker>,
     result: Option<RESULT>,
+    is_canceled: bool,
 }
 
 impl <RESULT> NotifyFutureState<RESULT> {
     pub fn new() -> Arc<Mutex<NotifyFutureState<RESULT>>> {
         Arc::new(Mutex::new(NotifyFutureState {
             waker: None,
-            result: None
+            result: None,
+            is_canceled: false,
         }))
     }
 
@@ -22,6 +24,10 @@ impl <RESULT> NotifyFutureState<RESULT> {
         if state.waker.is_some() {
             state.waker.take().unwrap().wake();
         }
+    }
+
+    pub fn is_canceled(&self) -> bool {
+        self.is_canceled
     }
 }
 
@@ -84,6 +90,10 @@ impl<RESULT> Notify<RESULT> {
     pub fn notify(self, result: RESULT) {
         NotifyFutureState::set_complete(&self.state, result);
     }
+
+    pub fn is_canceled(&self) -> bool {
+        self.state.lock().unwrap().is_canceled()
+    }
 }
 
 pub struct NotifyWaiter<RESULT> {
@@ -95,6 +105,14 @@ impl<RESULT> NotifyWaiter<RESULT> {
         Self {
             state
         }
+    }
+}
+
+impl<RESULT> Drop for NotifyWaiter<RESULT> {
+    fn drop(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        state.waker.take();
+        state.is_canceled = true;
     }
 }
 
