@@ -107,7 +107,7 @@ impl <RESULT> Future for NotifyWaiter<RESULT> {
             return Poll::Ready(state.result.take().unwrap());
         }
 
-        if state.waker.is_none() {
+        if state.waker.is_none() || !state.waker.as_ref().unwrap().will_wake(cx.waker()) {
             state.waker = Some(cx.waker().clone());
         }
         Poll::Pending
