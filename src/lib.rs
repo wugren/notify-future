@@ -1,11 +1,12 @@
 use std::future::Future;
-use std::sync::{Mutex, Arc};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::pin::Pin;
 use std::task::{Poll, Context, Waker};
 
 struct NotifyFutureState<RESULT> {
     waker: Option<Waker>,
     result: Option<RESULT>,
+    is_completed: bool,
     is_canceled: bool,
 }
 
@@ -14,21 +15,35 @@ impl <RESULT> NotifyFutureState<RESULT> {
         Arc::new(Mutex::new(NotifyFutureState {
             waker: None,
             result: None,
+            is_completed: false,
             is_canceled: false,
         }))
     }
 
     pub fn set_complete(state: &Arc<Mutex<NotifyFutureState<RESULT>>>, result: RESULT) {
-        let mut state = state.lock().unwrap();
-        state.result = Some(result);
-        if state.waker.is_some() {
-            state.waker.take().unwrap().wake();
+        let waker = {
+            let mut state = lock_state(state);
+            if state.is_completed || state.is_canceled {
+                return;
+            }
+
+            state.result = Some(result);
+            state.is_completed = true;
+            state.waker.take()
+        };
+
+        if let Some(waker) = waker {
+            waker.wake();
         }
     }
 
     pub fn is_canceled(&self) -> bool {
         self.is_canceled
     }
+}
+
+fn lock_state<RESULT>(state: &Arc<Mutex<NotifyFutureState<RESULT>>>) -> MutexGuard<'_, NotifyFutureState<RESULT>> {
+    state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[deprecated(
@@ -39,6 +54,7 @@ pub struct NotifyFuture<RESULT> {
     state:Arc<Mutex<NotifyFutureState<RESULT>>>
 }
 
+#[allow(deprecated)]
 impl<RESULT> Clone for NotifyFuture<RESULT> {
     fn clone(&self) -> Self {
         Self {
@@ -47,6 +63,7 @@ impl<RESULT> Clone for NotifyFuture<RESULT> {
     }
 }
 
+#[allow(deprecated)]
 impl <RESULT> NotifyFuture<RESULT> {
     pub fn new() -> Self {
         Self{
@@ -59,16 +76,21 @@ impl <RESULT> NotifyFuture<RESULT> {
     }
 }
 
+#[allow(deprecated)]
 impl <RESULT> Future for NotifyFuture<RESULT> {
     type Output = RESULT;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut state = self.state.lock().unwrap();
-        if state.result.is_some() {
-            return Poll::Ready(state.result.take().unwrap());
+        let mut state = lock_state(&self.state);
+        if state.is_completed {
+            if let Some(result) = state.result.take() {
+                return Poll::Ready(result);
+            }
+
+            panic!("NotifyFuture was awaited by more than one task. Use Notify::new() instead");
         }
 
-        if state.waker.is_none() {
+        if state.waker.is_none() || !state.waker.as_ref().unwrap().will_wake(cx.waker()) {
             state.waker = Some(cx.waker().clone());
         }
         Poll::Pending
@@ -92,7 +114,7 @@ impl<RESULT> Notify<RESULT> {
     }
 
     pub fn is_canceled(&self) -> bool {
-        self.state.lock().unwrap().is_canceled()
+        lock_state(&self.state).is_canceled()
     }
 }
 
@@ -110,9 +132,11 @@ impl<RESULT> NotifyWaiter<RESULT> {
 
 impl<RESULT> Drop for NotifyWaiter<RESULT> {
     fn drop(&mut self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_state(&self.state);
         state.waker.take();
-        state.is_canceled = true;
+        if !state.is_completed {
+            state.is_canceled = true;
+        }
     }
 }
 
@@ -120,8 +144,8 @@ impl <RESULT> Future for NotifyWaiter<RESULT> {
     type Output = RESULT;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut state = self.state.lock().unwrap();
-        if state.result.is_some() {
+        let mut state = lock_state(&self.state);
+        if state.is_completed {
             return Poll::Ready(state.result.take().unwrap());
         }
 
@@ -133,6 +157,7 @@ impl <RESULT> Future for NotifyWaiter<RESULT> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod test {
     use std::time::Duration;
     use crate::{Notify, NotifyFuture};
@@ -143,7 +168,7 @@ mod test {
             let notify_future = NotifyFuture::<u32>::new();
             let tmp_future = notify_future.clone();
             async_std::task::spawn(async move {
-                async_std::task::sleep(Duration::from_secs(3)).await;
+                async_std::task::sleep(Duration::from_millis(2000)).await;
                 tmp_future.set_complete(1);
             });
             let ret = notify_future.await;
@@ -156,10 +181,31 @@ mod test {
         async_std::task::block_on(async {
             let (notify, waiter) = Notify::<u32>::new();
             async_std::task::spawn(async move {
-                async_std::task::sleep(Duration::from_secs(3)).await;
+                async_std::task::sleep(Duration::from_millis(2000)).await;
                 notify.notify(1);
             });
             let ret = waiter.await;
+            assert_eq!(ret, 1);
+        });
+    }
+
+    #[test]
+    fn notify_waiter_drop_before_ready_is_canceled() {
+        let (notify, waiter) = Notify::<u32>::new();
+        drop(waiter);
+        assert!(notify.is_canceled());
+    }
+
+    #[test]
+    fn repeated_set_complete_keeps_first_value() {
+        async_std::task::block_on(async {
+            let notify_future = NotifyFuture::<u32>::new();
+            let notifier = notify_future.clone();
+
+            notifier.set_complete(1);
+            notifier.set_complete(2);
+
+            let ret = notify_future.await;
             assert_eq!(ret, 1);
         });
     }
